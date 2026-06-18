@@ -1,0 +1,270 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sqlite3
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from statistics import median
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from laoma_signal_engine.backtest.p21 import p21_db_path
+from laoma_signal_engine.backtest.p21_v2 import download_kline_cache_payload, kline_cache_status_payload, run_config_matrix_streaming_payload, universe_symbols
+
+
+GRID_PATH = ROOT / "DATA" / "backtest" / "strategy6_v3_4_walk_forward_STEP21_56_grid.json"
+PROGRESS_PATH = ROOT / "DATA" / "backtest" / "strategy6_v3_4_walk_forward_STEP21_56_progress.json"
+RESULT_PATH = ROOT / "DATA" / "backtest" / "strategy6_v3_4_walk_forward_STEP21_56_result.json"
+REPORT_DIR = ROOT / "docs" / "reports"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _stable_id(payload: dict[str, Any]) -> str:
+    return "s6v34_" + hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _params(*, follow_5m: float, min_vol: float, range_long: float, range_short: float, dist: float, first_tp: float, loss_cap: float) -> dict[str, Any]:
+    strategy6 = {
+        "strategy6_version": "v3_4",
+        "v2_uncertain_direction_score": 44,
+        "v2_hard_deny_direction_score": 34,
+        "v2_max_chase_bps": 55.0,
+        "v2_adverse_1m_deny_bps": 14.0,
+        "v2_reversal_1m_wait_bps": 5.0,
+        "v2_distance_from_mean_max_bps": 81.0,
+        "v2_high_quality_score": 74,
+        "v2_medium_quality_score": 56,
+        "v3_min_direction_context_score": 56,
+        "v3_uncertain_direction_context_score": 48,
+        "v3_hard_deny_context_score": 36,
+        "v3_reverse_1m_deny_bps": 8.0,
+        "v3_reverse_3m_deny_bps": 24.0,
+        "v3_fake_breakout_range_pos": 0.96,
+        "v3_second_acceptance_min_bps": 7.0,
+        "v3_max_entry_slippage_bps": 45.0,
+        "v3_quality_filter_mode": "shadow",
+        "v3_2_long_min_direction_context_score": 66,
+        "v3_2_short_min_direction_context_score": 56,
+        "v3_2_long_reverse_1m_deny_bps": 10.0,
+        "v3_2_short_reverse_1m_deny_bps": 16.0,
+        "v3_2_long_reverse_3m_deny_bps": 24.0,
+        "v3_2_short_reverse_3m_deny_bps": 30.0,
+        "v3_2_long_btc_against_action": "wait",
+        "v3_2_short_btc_against_action": "shadow",
+        "v3_2_quality_filter_mode": "shadow",
+        "v3_3_long_min_direction_context_score": 66,
+        "v3_3_short_min_direction_context_score": 56,
+        "v3_3_adverse_1m_wait_bps": 6.0,
+        "v3_3_adverse_3m_deny_bps": 18.0,
+        "v3_3_weak_followthrough_wait_bps": 4.0,
+        "v3_3_min_volume_z": 0.6,
+        "v3_4_min_aligned_1m_bps": -2.0,
+        "v3_4_min_aligned_3m_bps": -4.0,
+        "v3_4_min_followthrough_5m_bps": follow_5m,
+        "v3_4_min_volume_z": min_vol,
+        "v3_4_long_max_range_pos": range_long,
+        "v3_4_short_min_range_pos": range_short,
+        "v3_4_max_distance_to_mean_bps": dist,
+        "v3_4_no_edge_action": "wait",
+        "v3_4_range_noise_action": "wait_rebound",
+        "strategy6_wait_rebound_enabled": True,
+        "strategy6_wait_max_minutes": 10,
+        "strategy6_wait_pullback_min_bps": 6.0,
+        "strategy6_wait_pullback_max_bps": 48.0,
+        "strategy6_wait_confirm_bars": 2,
+        "strategy6_adaptive_exit_enabled": True,
+        "strategy6_backtest_max_effective_planned_rr": first_tp,
+        "max_loss_R_cap": loss_cap,
+        "first_tp_R": first_tp,
+        "abort_if_mfe_lt_R": 0.10,
+        "abort_if_mae_gt_R": 0.45,
+        "abort_window_min": 3,
+        "max_initial_adverse_R": loss_cap,
+    }
+    return {
+        "strategy_line": "strategy6",
+        "min_score": 50.0,
+        "target_rr": first_tp,
+        "min_rr": min(0.5, first_tp),
+        "min_net_rr": min(0.55, first_tp),
+        "min_effective_rr": max(0.30, min(0.50, first_tp - 0.05)),
+        "stop_atr_mult": 1.2,
+        "max_stop_bps": 180.0,
+        "min_stop_bps": 3.0,
+        "min_reachable_reward_bps": 6.0,
+        "tp_target_policy": {"mode": "fast_capped_rr", "target_net_rr": first_tp, "target_rr_cap": first_tp},
+        "range_room": {"long_max_range_pos": 0.92, "short_min_range_pos": 0.08},
+        "taker_fee_bps": 5.0,
+        "slippage_bps": 2.0,
+        "max_hold_minutes": 120,
+        "strategy6_exit_protection_enabled": True,
+        "strategy6_adaptive_exit_enabled": True,
+        "strategy6": strategy6,
+    }
+
+
+def build_grid() -> list[dict[str, Any]]:
+    raw: list[dict[str, Any]] = []
+    for follow_5m in (4.0, 6.0, 8.0):
+        for min_vol in (0.6, 0.8, 1.0):
+            for range_long, range_short, dist in ((0.88, 0.12, 72.0), (0.84, 0.16, 60.0), (0.90, 0.10, 84.0)):
+                for first_tp, loss_cap in ((0.60, 0.75), (0.70, 0.85)):
+                    raw.append(_params(follow_5m=follow_5m, min_vol=min_vol, range_long=range_long, range_short=range_short, dist=dist, first_tp=first_tp, loss_cap=loss_cap))
+    picks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    stride = max(1, len(raw) // 36)
+    for params in raw[0::stride]:
+        ps = _stable_id(params)
+        if ps not in seen:
+            picks.append({"parameter_set_id": ps, "parameters": params})
+            seen.add(ps)
+        if len(picks) >= 36:
+            break
+    return picks
+
+
+def ensure_grid(regenerate: bool = False) -> list[dict[str, Any]]:
+    GRID_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if regenerate and GRID_PATH.exists():
+        GRID_PATH.unlink()
+    if GRID_PATH.exists():
+        return json.loads(GRID_PATH.read_text(encoding="utf-8"))["parameter_sets"]
+    grid = build_grid()
+    GRID_PATH.write_text(json.dumps({"schema_version": "step21.56-strategy6-v3-4-grid-v1", "parameter_sets": grid, "generated_at": _now()}, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return grid
+
+
+def _avg(values: list[float]) -> float:
+    return round(sum(values) / len(values), 8) if values else 0.0
+
+
+def _median(values: list[float]) -> float:
+    return round(float(median(values)), 8) if values else 0.0
+
+
+def _metrics(values: list[float]) -> dict[str, Any]:
+    wins = [v for v in values if v > 0]
+    losses = [v for v in values if v < 0]
+    gw = sum(wins)
+    gl = abs(sum(losses))
+    return {
+        "trade_count": len(values),
+        "profit_factor": round(gw / gl, 8) if gl else (999.0 if gw else 0.0),
+        "expectancy_R": _avg(values),
+        "win_rate": round(len(wins) / len(values), 8) if values else 0.0,
+        "avg_win_R": _avg(wins),
+        "avg_loss_R": round(abs(_avg(losses)), 8),
+        "median_R": _median(values),
+        "total_R": round(sum(values), 8),
+    }
+
+
+def _split_name(day_index: int) -> str:
+    return "train" if day_index <= 18 else "validation" if day_index <= 24 else "test"
+
+
+def split_metrics(experiment_id: str) -> dict[str, Any]:
+    with sqlite3.connect(p21_db_path(ROOT)) as conn:
+        rows = conn.execute(
+            "SELECT parameter_set_id, entry_time_ms, net_R FROM p21_v2_shadow_orders WHERE experiment_id=? AND strategy_line='strategy6' AND net_R IS NOT NULL ORDER BY entry_time_ms",
+            (experiment_id,),
+        ).fetchall()
+    if not rows:
+        return {"leaderboard": [], "by_parameter_set": {}}
+    min_ts = min(int(r[1]) for r in rows)
+    buckets: dict[str, dict[str, list[float]]] = {}
+    for param, entry_ms, net_r in rows:
+        split = _split_name(int((int(entry_ms) - min_ts) // 86_400_000) + 1)
+        buckets.setdefault(str(param), {"train": [], "validation": [], "test": [], "all": []})
+        buckets[str(param)][split].append(float(net_r))
+        buckets[str(param)]["all"].append(float(net_r))
+    by_param = {p: {k: _metrics(v) for k, v in b.items()} for p, b in buckets.items()}
+    leaderboard = sorted(
+        ({"parameter_set_id": p, "selection_metric": "validation_profit_factor", **m} for p, m in by_param.items()),
+        key=lambda x: (float(x["validation"].get("profit_factor") or 0), float(x["validation"].get("expectancy_R") or -999), int(x["validation"].get("trade_count") or 0)),
+        reverse=True,
+    )
+    for idx, item in enumerate(leaderboard, start=1):
+        item["rank"] = idx
+    return {"leaderboard": leaderboard, "by_parameter_set": by_param}
+
+
+def write_report(result: dict[str, Any], *, smoke: bool) -> Path:
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = REPORT_DIR / f"STEP21.56_strategy6_v3_4_walk_forward_matrix_{ts}.md"
+    selected = (result.get("walk_forward") or {}).get("selected") or {}
+    lines = [
+        "# STEP21.56 Strategy6 V3.4 Walk-Forward Matrix Report",
+        "",
+        f"- generated_at: `{_now()}`",
+        f"- mode: `{'smoke' if smoke else 'focused'}`",
+        f"- experiment_id: `{result.get('experiment_id')}`",
+        f"- trade_count: `{result.get('trade_count')}`",
+        f"- selected_parameter_set_id: `{selected.get('parameter_set_id')}`",
+        f"- validation_pf: `{(selected.get('validation') or {}).get('profit_factor')}`",
+        f"- test_pf: `{(selected.get('test') or {}).get('profit_factor')}`",
+        f"- result_json: `{RESULT_PATH.relative_to(ROOT)}`",
+        "",
+        "| rank | parameter_set_id | train PF | val PF | test PF | val trades | test trades | test expectancy_R |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for item in ((result.get("walk_forward") or {}).get("leaderboard") or [])[:10]:
+        lines.append(f"| {item.get('rank')} | `{item.get('parameter_set_id')}` | {item['train'].get('profit_factor')} | {item['validation'].get('profit_factor')} | {item['test'].get('profit_factor')} | {item['validation'].get('trade_count')} | {item['test'].get('trade_count')} | {item['test'].get('expectancy_R')} |")
+    lines.extend(["", "## Boundary", "", "- Test split is holdout only and is not used for parameter selection.", "- No production config or live runtime mutation."])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--max-symbols", type=int, default=None)
+    parser.add_argument("--max-sets", type=int, default=None)
+    parser.add_argument("--max-workers", type=int, default=6)
+    parser.add_argument("--symbol-shard-size", type=int, default=10)
+    parser.add_argument("--skip-download", action="store_true")
+    parser.add_argument("--regenerate-grid", action="store_true")
+    args = parser.parse_args()
+    grid = ensure_grid(args.regenerate_grid)
+    max_symbols = args.max_symbols if args.max_symbols is not None else (30 if args.smoke else 100)
+    max_sets = args.max_sets if args.max_sets is not None else (12 if args.smoke else 30)
+    symbols = [s.upper() for s in universe_symbols(ROOT, limit=max_symbols)[:max_symbols]]
+    if not args.skip_download:
+        status = kline_cache_status_payload(ROOT, symbols=symbols, days=30, max_symbols=len(symbols))
+        missing = [r["symbol"] for r in status.get("symbols", []) if r.get("status") != "ready"]
+        if missing:
+            download_kline_cache_payload(ROOT, symbols=missing, days=30, max_symbols=len(missing), sleep_sec=0.02)
+    last = {"done": 0, "t": 0.0}
+
+    def cb(progress: dict[str, Any]) -> None:
+        payload = dict(progress)
+        payload["updated_at"] = _now()
+        PROGRESS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        done, total, now = int(payload.get("done_count") or 0), int(payload.get("total_count") or 0), time.time()
+        if done == 1 or done == total or done - int(last["done"]) >= 10 or now - float(last["t"]) >= 60:
+            last.update({"done": done, "t": now})
+            print(json.dumps({"done_count": done, "total_count": total, "current_parameter_set_id": payload.get("current_parameter_set_id")}, ensure_ascii=False), flush=True)
+
+    payload = run_config_matrix_streaming_payload(ROOT, symbols=symbols, strategy_line="strategy6", days=30, max_symbols=max_symbols, max_sets=max_sets, parameter_grid=grid[:max_sets], write=True, symbol_shard_size=args.symbol_shard_size, max_workers=args.max_workers, scheduler_mode="global_queue", progress_callback=cb)
+    wf = split_metrics(str(payload.get("experiment_id") or ""))
+    wf["selected"] = (wf.get("leaderboard") or [{}])[0]
+    result = {"schema_version": "step21.56-strategy6-v3-4-walk-forward-result-v1", "mode": "smoke" if args.smoke else "focused", "no_lookahead_contract": {"entry_feature_contract_field": "strategy6_v3_4_known_at_contract", "test_split_used_for_selection": False}, "grid_path": str(GRID_PATH), "progress_path": str(PROGRESS_PATH), "walk_forward": wf, **payload}
+    RESULT_PATH.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    report = write_report(result, smoke=args.smoke)
+    sel = wf.get("selected") or {}
+    print(json.dumps({"result_path": str(RESULT_PATH), "report_path": str(report), "experiment_id": result.get("experiment_id"), "selected_parameter_set_id": sel.get("parameter_set_id"), "validation_pf": (sel.get("validation") or {}).get("profit_factor"), "test_pf": (sel.get("test") or {}).get("profit_factor")}, ensure_ascii=False, indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,74 @@
+# Step 1.5 HTTP fetch budget (see docs/STEP1.5_任务卡.md §6)
+
+fetch:
+  max_concurrency: 8
+  request_timeout_sec: 10
+  retry_times: 2
+  retry_backoff_sec: 1.5
+  batch_sleep_ms: 200
+  max_symbols_per_run: null
+
+light_snapshot:
+  atr_period_15m: 14
+  entry_1m_bars: 3
+  top_gainer_rank_threshold: 10
+  top_loser_rank_threshold: 10
+
+# Step 1.51 async fetch (see docs/STEP1.51_任务卡.md)
+async_fetch:
+  soft_limit_ratio: 0.80
+  hard_limit_ratio: 0.95
+  backoff_base_sec: 1.0
+  backoff_max_sec: 30.0
+  circuit_break_on_418: true
+  perf_log_path: DATA/logs/light_snapshot_perf.jsonl
+  exchange_info_cache_path: DATA/market/exchange_info_futures_cache.json
+  exchange_info_cache_ttl_sec: 86400
+  exchange_info_cache_first_enabled: true
+  exchange_info_live_refresh_policy: cache_missing_or_expired
+  exchange_info_allow_cache_on_429_418: true
+  exchange_info_fail_if_cache_missing: true
+  rest_circuit_default_418_cooldown_sec: 3600
+  rest_circuit_default_429_cooldown_sec: 180
+  market_snapshot_cache_first_enabled: true
+  market_snapshot_cache_ttl_sec: 120
+  market_snapshot_cache_min_coverage_ratio: 0.80
+  market_snapshot_fail_closed_on_circuit_open: true
+  rest_budget_preflight_enabled: true
+  rest_budget_min_remaining_weight: 200
+
+step15_daemon:
+  enabled: true
+  tick_sec: 5
+  stale_after_sec: 30
+  shard_size_normal: 30
+  shard_size_tight_budget: 10
+  shard_size_half_open: 3
+  half_open_success_required: 5
+  close_after_successful_shards: 20
+  half_open_expand_steps: [3, 6, 12, 24]
+  pid_path: DATA/runtime/step15_snapshot_daemon.pid
+  heartbeat_path: DATA/runtime/step15_snapshot_daemon_heartbeat.json
+  status_path: DATA/runtime/step15_snapshot_daemon_status.json
+
+freshness_sla:
+  tradeable_hot:
+    fresh_sec: 60
+    stale_usable_sec: 120
+  active_watch:
+    fresh_sec: 120
+    stale_usable_sec: 300
+  watch_only:
+    fresh_sec: 300
+    stale_usable_sec: 600
+  low_quality:
+    fresh_sec: 600
+    stale_usable_sec: 900
+
+# Optional semantic mirror (implement reads async_fetch today; keep for doc parity)
+rate_limit:
+  enabled: true
+  soft_limit_ratio: 0.80
+  hard_limit_ratio: 0.95
+  circuit_break_on_418: true
+  sleep_when_soft_limited_ms: 300

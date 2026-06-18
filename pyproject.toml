@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strategy-lab"
+version = "0.1.0"
+description = "Strategy Lab: CLI decision pipeline, sandbox research, backtest, and paper trading workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "numpy>=1.26.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.0",
+  "orjson>=3.9.0",
+  "PyYAML>=6.0",
+  "python-dotenv>=1.0.0",
+  "tenacity>=8.2.0",
+  "websockets>=12.0",
+  "fastapi>=0.110.0",
+  "uvicorn>=0.27.0",
+]
+
+[project.optional-dependencies]
+cli = ["rich>=13.0"]
+dev = ["pytest>=7.0", "ruff>=0.4.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["laoma_signal_engine*"]
+
+[tool.setuptools.package-data]
+laoma_signal_engine = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["laoma_signal_engine/tests"]
+markers = [
+    "manual: real-network smoke tests (excluded from default CI/local run)",
+    "integration: integration tests (excluded from default CI/local run)",
+]
+addopts = ["-ra", "-q", "-m", "not manual and not integration"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

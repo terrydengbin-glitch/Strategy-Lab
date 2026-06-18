@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.6",
+  "generated_at": "2026-01-10T00:00:00Z",
+  "expires_at": "2026-01-11T00:00:00Z",
+  "count": 1,
+  "counts": {
+    "total_pairs": 1,
+    "futures_count": 1,
+    "spot_count": 0,
+    "both_spot_and_futures": 0,
+    "futures_only": 1,
+    "spot_only": 0,
+    "neither_spot_nor_futures": 0
+  },
+  "pairs": [
+    {
+      "base_asset": "BTC",
+      "display_base_asset": "BTC",
+      "cashtag": "$BTC",
+      "spot_cashtag_symbol": "BTCUSDT",
+      "symbol_safe_id": "BTCUSDT",
+      "spot_symbol": null,
+      "futures_symbol": "BTCUSDT",
+      "has_spot": false,
+      "has_um_futures": true,
+      "eligible_for_signal_engine": true,
+      "eligible_for_post": false,
+      "eligible_for_trade_analysis": true,
+      "rank_futures_gainer": null,
+      "rank_futures_loser": null
+    }
+  ]
+}

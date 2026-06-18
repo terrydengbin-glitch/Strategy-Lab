@@ -1,0 +1,1 @@
+"""Funding rate fetch adapter."""

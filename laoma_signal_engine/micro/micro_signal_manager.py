@@ -1,0 +1,1 @@
+"""Micro signal state manager."""

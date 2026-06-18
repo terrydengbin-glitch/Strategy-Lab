@@ -1,0 +1,1 @@
+"""Divergence adapter (V2)."""

@@ -1,0 +1,9 @@
+# Primary / trigger / entry timeframes (align with V1.6 contract)
+
+primary_tf: "15m"
+trigger_tf: "5m"
+entry_tf: "1m"
+background_tfs:
+  - "1h"
+  - "24h"
+decision_basis: "rolling_15m"

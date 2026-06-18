@@ -1,0 +1,1 @@
+"""Basis fetch adapter."""

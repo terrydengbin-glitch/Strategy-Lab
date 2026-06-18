@@ -1,0 +1,1 @@
+"""Write latest_decisions.json and minified variants (T21)."""
