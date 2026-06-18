@@ -957,7 +957,7 @@ def _run_micro_daemon_control_from_args(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="laoma_signal_engine", description="abnormal-signal-engine CLI")
+    p = argparse.ArgumentParser(prog="laoma_signal_engine", description="Strategy Lab CLI")
     sub = p.add_subparsers(dest="command", required=True)
 
     run_p = sub.add_parser(
